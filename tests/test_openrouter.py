@@ -305,11 +305,25 @@ class OpenRouterTests(unittest.TestCase):
         seen = {}
         def handler(request):
             seen["authorization"] = request.headers.get("authorization")
-            return httpx.Response(200, json={"data": [{"id": REQUIRED_MODEL}]})
+            seen["url"] = str(request.url)
+            return httpx.Response(200, json={"data": {
+                "id": REQUIRED_MODEL,
+                "endpoints": [{"supported_parameters": ["response_format", "structured_outputs"]}],
+            }})
         ready, _detail = asyncio.run(self.provider(handler).check_ready())
         self.assertTrue(ready)
         self.assertEqual(seen["authorization"], f"Bearer {API_KEY}")
+        self.assertTrue(seen["url"].endswith(f"/models/{REQUIRED_MODEL}/endpoints"))
         self.assertNotIn(API_KEY, _detail)
+
+    def test_readiness_is_false_when_free_alias_has_no_structured_endpoint(self):
+        provider = self.provider(lambda _request: httpx.Response(200, json={"data": {
+            "id": REQUIRED_MODEL,
+            "endpoints": [],
+        }}))
+        ready, detail = asyncio.run(provider.check_ready())
+        self.assertFalse(ready)
+        self.assertIn("no available endpoint", detail.lower())
 
     def test_existing_ollama_transport_remains_available(self):
         seen = {}

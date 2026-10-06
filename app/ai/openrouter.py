@@ -154,16 +154,25 @@ class OpenRouterGemmaProvider(GemmaProvider):
                 transport=self.transport,
             ) as client:
                 response = await client.get(
-                    self.config.openrouter_models_url,
+                    self.config.openrouter_model_endpoints_url,
                     headers=self._headers(),
                 )
                 response.raise_for_status()
                 payload = response.json()
-            models = payload.get("data")
-            if not isinstance(models, list):
-                return False, "OpenRouter returned an invalid model catalog."
-            if not any(isinstance(item, dict) and item.get("id") == REQUIRED_MODEL for item in models):
-                return False, f"Required OpenRouter model '{REQUIRED_MODEL}' is not available."
+            model = payload.get("data")
+            if not isinstance(model, dict) or model.get("id") != REQUIRED_MODEL:
+                return False, "OpenRouter returned an invalid endpoint catalog for the required model."
+            endpoints = model.get("endpoints")
+            if not isinstance(endpoints, list):
+                return False, "OpenRouter returned an invalid endpoint catalog for the required model."
+            if not any(
+                isinstance(endpoint, dict)
+                and "structured_outputs" in endpoint.get("supported_parameters", [])
+                for endpoint in endpoints
+            ):
+                return False, (
+                    f"No available endpoint for '{REQUIRED_MODEL}' currently advertises structured outputs."
+                )
         except (httpx.HTTPError, ValueError, TypeError, AttributeError):
             return False, "OpenRouter could not be reached or did not return a valid model catalog."
         return True, f"Required model '{REQUIRED_MODEL}' is available through OpenRouter."

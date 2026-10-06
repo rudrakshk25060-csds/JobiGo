@@ -65,5 +65,9 @@ class Settings:
     def openrouter_models_url(self) -> str:
         return f"{self.openrouter_base_url}/models"
 
+    @property
+    def openrouter_model_endpoints_url(self) -> str:
+        return f"{self.openrouter_base_url}/models/{self.openrouter_model}/endpoints"
+
 
 settings = Settings()
