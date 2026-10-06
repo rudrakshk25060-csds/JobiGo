@@ -24,10 +24,10 @@ Browser (HTML / CSS / JavaScript)
   └── POST /api/sessions -> FastAPI validation -> Gemma review + next-session recommendation -> SQLite history
 
 Local:      AIProvider -> GemmaProvider -> Ollama -> Gemma 3 4B
-Production: AIProvider -> OpenRouterGemmaProvider -> OpenRouter -> google/gemma-3-4b-it
+Production: AIProvider -> OpenRouterGemmaProvider -> OpenRouter -> google/gemma-3-4b-it:free
 ```
 
-`AIProvider` defines mission generation, session evaluation, next-session recommendations, and readiness checks. The existing `GemmaProvider` continues to call Ollama's local `/api/chat` endpoint. `OpenRouterGemmaProvider` uses OpenRouter's chat-completions endpoint and requires the exact `google/gemma-3-4b-it` model. Both use the same mission, review, progression, and validation logic. Structured JSON Schema output is requested, then parsed and validated by Pydantic; the mission is checked against the selected time, goal, and equipment, with one correction attempt for a mismatch. Invalid output or unavailable AI produces an explicit API error rather than a fabricated mission.
+`AIProvider` defines mission generation, session evaluation, next-session recommendations, and readiness checks. The existing `GemmaProvider` continues to call Ollama's local `/api/chat` endpoint. `OpenRouterGemmaProvider` uses OpenRouter's chat-completions endpoint and requires the exact `google/gemma-3-4b-it:free` model. Both use the same mission, review, progression, and validation logic. Structured JSON Schema output is requested, then parsed and validated by Pydantic; the mission is checked against the selected time, goal, and equipment, with one correction attempt for a mismatch. Invalid output or unavailable AI produces an explicit API error rather than a fabricated mission.
 
 The provider abstraction keeps local development independent of the production inference transport. Gemma remains the AI model in both paths; OpenRouter is a managed inference layer, not a replacement model. ElevenLabs remains a separate optional voice integration.
 
@@ -73,7 +73,7 @@ Set these server-side environment variables for the OpenRouter path:
 APP_ENV=production
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=<secret stored in the hosting platform's secret settings>
-OPENROUTER_MODEL=google/gemma-3-4b-it
+OPENROUTER_MODEL=google/gemma-3-4b-it:free
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_TIMEOUT_SECONDS=90
 ```
@@ -95,7 +95,7 @@ Copy `.env.example` to `.env`. Supported settings:
 | `GEMMA_TIMEOUT_SECONDS` | `90` | Per-request model timeout. |
 | `AI_PROVIDER` | `ollama` | Selects `ollama` for local inference or `openrouter` for managed inference. |
 | `OPENROUTER_API_KEY` | empty | Required server-side key when `AI_PROVIDER=openrouter`; never place in frontend code. |
-| `OPENROUTER_MODEL` | `google/gemma-3-4b-it` | Exact production model. Other values are rejected when OpenRouter is selected. |
+| `OPENROUTER_MODEL` | `google/gemma-3-4b-it:free` | Exact production model. Other values are rejected when OpenRouter is selected. |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter-compatible API base URL. |
 | `OPENROUTER_TIMEOUT_SECONDS` | `90` | Per-request OpenRouter timeout. |
 | `ELEVENLABS_API_KEY` | empty | Optional server-side ElevenLabs credential; never expose it in frontend code. |
@@ -134,18 +134,14 @@ Copy `.env.example` to `.env`. Supported settings:
 - **ElevenLabs:** optional spoken mission briefings are integrated through `VoiceProvider`. Add `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` to the untracked local `.env` to enable **🎧 COACH ME**. No live credentials are included in the repository; without them, the written mission remains usable. The feature uses the ElevenLabs streaming text-to-speech API and requires network access.
 - **Backboard:** not integrated. Recent structured session history is passed directly to Gemma; no hosted memory service is used.
 - **Privacy:** OpenRouter receives the current mission setup, the mission being reviewed, submitted statistics and notes, and a reduced coaching-history summary. Prior notes, session IDs, mission titles, and long plan text are excluded from history context. ElevenLabs receives only the short spoken mission script; no session notes are included in that script.
-- **Render:** prepared in `render.yaml`, but not deployed. It specifies one Singapore Free Python web service and one Uvicorn worker, with no disk or database. Production uses OpenRouter and `google/gemma-3-4b-it`; Render does not need or use local Ollama. SQLite writes to `./data/sessions.sqlite3` on Render's ephemeral filesystem. Render may spin the service down after 15 minutes without incoming traffic, and local filesystem changes are lost on spin-down, restart, or redeploy. The free deployment is intended for a controlled hackathon demonstration, not production SaaS or durable session history. See [Render Free services](https://render.com/docs/free) and [Render web services](https://render.com/docs/web-services).
+- **Render:** deployed from `render.yaml` as one Singapore Free Python web service. It specifies one Singapore Free Python web service and one Uvicorn worker, with no disk or database. Production uses OpenRouter and `google/gemma-3-4b-it:free`; Render does not need or use local Ollama. SQLite writes to `./data/sessions.sqlite3` on Render's ephemeral filesystem. Render may spin the service down after 15 minutes without incoming traffic, and local filesystem changes are lost on spin-down, restart, or redeploy. The free deployment is intended for a controlled hackathon demonstration, not production SaaS or durable session history. See [Render Free services](https://render.com/docs/free) and [Render web services](https://render.com/docs/web-services).
 
-`APP_ENV=production` disables FastAPI's interactive docs and requires `DEMO_ACCESS_TOKEN`. The Render Blueprint configures the Free web service and remote Gemma provider; it does not create a Render service until you explicitly create/sync the Blueprint.
+`APP_ENV=production` disables FastAPI's interactive docs and requires `DEMO_ACCESS_TOKEN`. The Render Blueprint configures the Free web service and remote Gemma provider.
 
-### Render deployment steps (not yet performed)
+### Current Render deployment
 
-1. Push this repository to the Git provider you want Render to read, then create a new **Blueprint** in Render and connect that repository. Render reads the checked-in `render.yaml`.
-2. Keep the service on the **Free** plan specified in the Blueprint. It creates only the web service and asks for no payment method or paid storage resource.
-3. In the Render Dashboard, set `OPENROUTER_API_KEY` and a long random `DEMO_ACCESS_TOKEN` as secret environment variables. Keep both out of Git and frontend code. Give demo participants the username `jobigo` and token privately. Optional voice requires `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`; `ELEVENLABS_MODEL_ID` may also be set.
-4. Keep `CORS_ALLOWED_ORIGINS` unset for the bundled same-origin frontend. If you later serve the frontend elsewhere, set a comma-separated list of exact `https://` origins.
-5. After deployment, check `/health` and `/ready`. `/ready` verifies OpenRouter connectivity and model listing only; make one controlled generation request using the private demo credential to verify actual inference.
-6. Session history is in `./data/sessions.sqlite3` on Render Free's ephemeral filesystem. It supports the mission-to-session-review flow while available, but can be lost during spin-down, restart, or redeploy. Do not use it for durable user data.
+The live service is [jobigo-demo.onrender.com](https://jobigo-demo.onrender.com/). Render reads this repository’s checked-in `render.yaml`.
+The service uses the **Free** plan and requires `OPENROUTER_API_KEY` and `DEMO_ACCESS_TOKEN` in Render's secret settings. Optional voice requires `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`. Keep `CORS_ALLOWED_ORIGINS` unset for the bundled same-origin frontend; if the frontend is hosted separately, list only its exact HTTPS origin. Check `/health` and `/ready` after deploy. `/ready` confirms OpenRouter connectivity and model listing; it does not make a generation request. Session history uses `./data/sessions.sqlite3` on Render Free's ephemeral filesystem and may be lost during spin-down, restart, or redeploy.
 
 Render requires the web service to listen on `0.0.0.0` and its `PORT` environment variable; the Blueprint start command configures both. Free services spin down after 15 minutes of inactivity and can take about a minute to start again. Filesystem changes, including the SQLite history, are lost after spin-down, restart, or redeploy. See [Render Free services](https://render.com/docs/free), [Render web services](https://render.com/docs/web-services), and [health checks](https://render.com/docs/health-checks).
 

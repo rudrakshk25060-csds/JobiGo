@@ -22,7 +22,7 @@ from app.ai.gemma import GemmaProvider, parse_structured_output
 from app.config import Settings
 
 T = TypeVar("T", bound=BaseModel)
-REQUIRED_MODEL = "google/gemma-3-4b-it"
+REQUIRED_MODEL = "google/gemma-3-4b-it:free"
 logger = logging.getLogger(__name__)
 _OPENROUTER_UNSUPPORTED_KEYS = {
     "title",
