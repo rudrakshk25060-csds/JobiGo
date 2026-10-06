@@ -39,13 +39,20 @@ def parse_structured_output(raw: str, schema: type[T]) -> T:
 class GemmaProvider:
     name = "Gemma 3 4B via local Ollama"
 
-    def __init__(self, config: Settings):
+    def __init__(self, config: Settings, transport: httpx.AsyncBaseTransport | None = None):
         self.config = config
+        self.transport = transport
+
+    @property
+    def model_identifier(self) -> str:
+        return self.config.gemma_model
 
     async def check_ready(self) -> tuple[bool, str]:
         """Check whether Ollama responds and has the configured model installed."""
         try:
-            async with httpx.AsyncClient(timeout=min(self.config.gemma_timeout_seconds, 3.0)) as client:
+            async with httpx.AsyncClient(
+                timeout=min(self.config.gemma_timeout_seconds, 3.0), transport=self.transport
+            ) as client:
                 response = await client.get(self.config.gemma_tags_url)
                 response.raise_for_status()
                 models = response.json().get("models", [])
@@ -61,7 +68,9 @@ class GemmaProvider:
 
     async def _complete(self, system: str, prompt: str, schema: type[T]) -> T:
         try:
-            async with httpx.AsyncClient(timeout=self.config.gemma_timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=self.config.gemma_timeout_seconds, transport=self.transport
+            ) as client:
                 response = await client.post(
                     self.config.gemma_chat_url,
                     json={
@@ -106,9 +115,8 @@ class GemmaProvider:
             "cooldown, motivation, and a short safety note."
         )
         inputs = {
-            "player": "Jobi Anand",
             "setup": setup.model_dump(mode="json"),
-            "recent_sessions": history[-5:],
+            "recent_sessions": self._history_context(history),
         }
         last_issue = ""
         for attempt in range(2):
@@ -173,7 +181,11 @@ class GemmaProvider:
             "Write complete sentences and end each text field cleanly."
         )
         prompt = json.dumps(
-            {"mission": mission.model_dump(mode="json"), "result": report.model_dump(mode="json"), "recent_sessions": history[-5:]},
+            {
+                "mission": mission.model_dump(mode="json"),
+                "result": report.model_dump(mode="json"),
+                "recent_sessions": self._history_context(history),
+            },
             ensure_ascii=False,
         )
         return await self._complete(system, prompt, SessionReview)
@@ -198,7 +210,7 @@ class GemmaProvider:
             "latest_review": review.model_dump(mode="json"),
             "completed_mission": mission.model_dump(mode="json"),
             "player_report": report.model_dump(mode="json"),
-            "recent_sessions": history[-5:],
+            "recent_sessions": self._history_context(history),
         }
         desired_goal = self._recommended_focus(review, mission.goal.value)
         desired_time = self._next_session_time(mission.duration_minutes, report.difficulty.value)
@@ -215,6 +227,30 @@ class GemmaProvider:
         raise AIProviderInvalidOutput(
             "Gemma could not align the next session with its review. Please retry."
         )
+
+    @staticmethod
+    def _history_context(history: list[dict]) -> list[dict]:
+        """Keep only coaching-relevant prior outcomes; omit IDs, notes and repeated plan text."""
+        context: list[dict] = []
+        for record in history[-5:]:
+            mission = record.get("mission", {})
+            report = record.get("report", {})
+            review = record.get("review", {})
+            next_session = record.get("next_session", {})
+            context.append({
+                "goal": mission.get("goal"),
+                "duration_minutes": mission.get("duration_minutes"),
+                "attempts": report.get("attempts"),
+                "successful_attempts": report.get("successful_attempts"),
+                "goals": report.get("goals"),
+                "completed_drills": report.get("completed_drills"),
+                "difficulty": report.get("difficulty"),
+                "weakness": review.get("weakness"),
+                "actionable_recommendation": review.get("actionable_recommendation"),
+                "next_goal": next_session.get("goal"),
+                "next_duration_minutes": next_session.get("available_time"),
+            })
+        return context
 
     @staticmethod
     def _recommended_focus(review: SessionReview, fallback_goal: str) -> str:

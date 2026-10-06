@@ -23,6 +23,26 @@ class AIProviderInvalidOutput(AIProviderError):
     """The model returned output that failed schema validation."""
 
 
+class AIProviderMisconfigured(AIProviderError):
+    """The selected AI provider is missing required server configuration."""
+
+
+class AIProviderAuthenticationFailed(AIProviderError):
+    """The upstream AI provider rejected its server-side credentials."""
+
+
+class AIProviderRateLimited(AIProviderError):
+    """The upstream AI provider is temporarily rate limiting requests."""
+
+
+class AIProviderUpstreamFailure(AIProviderError):
+    """The upstream AI provider returned a non-retryable service error."""
+
+
+class AIProviderTimeout(AIProviderUnavailable):
+    """The upstream AI provider did not respond before the configured timeout."""
+
+
 class AIProvider(Protocol):
     name: str
 

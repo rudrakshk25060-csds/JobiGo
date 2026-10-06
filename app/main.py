@@ -9,8 +9,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from app.ai.base import AIProvider, AIProviderError, AIProviderInvalidOutput, AIProviderUnavailable
+from app.ai.base import (
+    AIProvider,
+    AIProviderAuthenticationFailed,
+    AIProviderError,
+    AIProviderInvalidOutput,
+    AIProviderMisconfigured,
+    AIProviderRateLimited,
+    AIProviderTimeout,
+    AIProviderUnavailable,
+    AIProviderUpstreamFailure,
+)
 from app.ai.gemma import GemmaProvider
+from app.ai.openrouter import OpenRouterGemmaProvider
 from app.config import ROOT, settings
 from app.models import MissionResponse, MissionSetup, SessionProgress, SessionRecord, SessionSubmission
 from app.store import SessionStore, SessionStoreError
@@ -41,7 +52,25 @@ app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="stati
 
 
 def get_ai_provider() -> AIProvider:
+    if settings.ai_provider == "openrouter":
+        return OpenRouterGemmaProvider(settings)
     return GemmaProvider(settings)
+
+
+def provider_http_exception(exc: AIProviderError) -> HTTPException:
+    if isinstance(exc, AIProviderMisconfigured):
+        return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, AIProviderAuthenticationFailed):
+        return HTTPException(status_code=502, detail=str(exc))
+    if isinstance(exc, AIProviderRateLimited):
+        return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, AIProviderTimeout):
+        return HTTPException(status_code=504, detail=str(exc))
+    if isinstance(exc, AIProviderUnavailable):
+        return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, (AIProviderUpstreamFailure, AIProviderInvalidOutput)):
+        return HTTPException(status_code=502, detail=str(exc))
+    return HTTPException(status_code=502, detail="The AI coach could not complete the request.")
 
 
 def get_store() -> SessionStore:
@@ -72,14 +101,15 @@ def health() -> dict[str, str]:
 
 @app.get("/ready")
 async def readiness(provider: AIProvider = Depends(get_ai_provider)) -> dict[str, str]:
-    """Readiness: confirms the configured Gemma model can be reached through Ollama."""
+    """Readiness: confirms the configured Gemma model is available from the selected provider."""
     ready, detail = await provider.check_ready()
     if not ready:
         raise HTTPException(
             status_code=503,
             detail={"status": "not_ready", "check": "gemma_model", "message": detail},
         )
-    return {"status": "ready", "check": "gemma_model", "model": settings.gemma_model}
+    model = getattr(provider, "model_identifier", settings.gemma_model)
+    return {"status": "ready", "check": "gemma_model", "model": model}
 
 
 @app.get("/api/sessions", response_model=SessionProgress)
@@ -99,12 +129,8 @@ async def create_mission(
     history = recent_history(store)
     try:
         mission = await provider.generate_mission(setup, history)
-    except AIProviderUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except AIProviderInvalidOutput as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except AIProviderError as exc:
-        raise HTTPException(status_code=502, detail="The AI coach could not create a mission.") from exc
+        raise provider_http_exception(exc) from exc
     return MissionResponse(mission_id=str(uuid4()), mission=mission, ai_provider=provider.name)
 
 
@@ -143,12 +169,8 @@ async def complete_session(
         next_session = await provider.recommend_next_session(
             review, submission.mission, submission.report, history
         )
-    except AIProviderUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except AIProviderInvalidOutput as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except AIProviderError as exc:
-        raise HTTPException(status_code=502, detail="The AI coach could not review this session.") from exc
+        raise provider_http_exception(exc) from exc
 
     record = SessionRecord(
         session_id=submission.mission_id,

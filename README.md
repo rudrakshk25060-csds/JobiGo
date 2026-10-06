@@ -19,12 +19,17 @@ The UI is intentionally focused on the outdoor session; it is not a statistics d
 ```text
 Browser (HTML / CSS / JavaScript)
   ├── GET /api/sessions ──> count-only progress response
-  ├── POST /api/missions ─> FastAPI validation -> AIProvider -> GemmaProvider -> Ollama -> Gemma 3 4B
+  ├── POST /api/missions ─> FastAPI validation -> AIProvider -> selected Gemma provider
   ├── POST /api/missions/{mission_id}/voice -> VoiceProvider -> ElevenLabs streaming TTS -> MP3
   └── POST /api/sessions -> FastAPI validation -> Gemma review + next-session recommendation -> local JSON history
+
+Local:      AIProvider -> GemmaProvider -> Ollama -> Gemma 3 4B
+Production: AIProvider -> OpenRouterGemmaProvider -> OpenRouter -> google/gemma-3-4b-it
 ```
 
-`AIProvider` defines mission generation, session evaluation, next-session recommendations, and readiness checks. `GemmaProvider` calls Ollama's local `/api/chat` endpoint, supplies a Pydantic JSON Schema through Ollama's `format` option, and validates responses. Mission constraints are checked against the selected time, goal, and equipment. A single correction attempt is made for a mismatch; invalid output or unavailable AI produces an explicit API error rather than mock output.
+`AIProvider` defines mission generation, session evaluation, next-session recommendations, and readiness checks. The existing `GemmaProvider` continues to call Ollama's local `/api/chat` endpoint. `OpenRouterGemmaProvider` uses OpenRouter's chat-completions endpoint and requires the exact `google/gemma-3-4b-it` model. Both use the same mission, review, progression, and validation logic. Structured JSON Schema output is requested, then parsed and validated by Pydantic; the mission is checked against the selected time, goal, and equipment, with one correction attempt for a mismatch. Invalid output or unavailable AI produces an explicit API error rather than a fabricated mission.
+
+The provider abstraction keeps local development independent of the production inference transport. Gemma remains the AI model in both paths; OpenRouter is a managed inference layer, not a replacement model. ElevenLabs remains a separate optional voice integration.
 
 Completed sessions are stored as JSON at `DATA_FILE`, with at most 100 records retained. File replacement is atomic against partial writes, but the store is intended for a local, single-process MVP; concurrent writes and multiple server workers can lose updates.
 
@@ -58,7 +63,24 @@ Requirements: Python 3.10+ and [Ollama](https://ollama.com/).
 
 5. Open <http://127.0.0.1:8000>.
 
-The default model configuration is `GEMMA_MODEL=gemma3:4b`, `GEMMA_BASE_URL=http://localhost:11434`, and `GEMMA_TIMEOUT_SECONDS=90`. `GEMMA_BASE_URL` may point to another Ollama-compatible endpoint; this app does not currently configure authentication headers for a protected remote model service. If a remote endpoint is used, mission/report data is sent there.
+The local default is `AI_PROVIDER=ollama`, `GEMMA_MODEL=gemma3:4b`, `GEMMA_BASE_URL=http://localhost:11434`, and `GEMMA_TIMEOUT_SECONDS=90`. Ollama is not removed or required when `AI_PROVIDER=openrouter`.
+
+## OpenRouter production inference
+
+Set these server-side environment variables for the OpenRouter path:
+
+```dotenv
+APP_ENV=production
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=<secret stored in the hosting platform's secret settings>
+OPENROUTER_MODEL=google/gemma-3-4b-it
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_TIMEOUT_SECONDS=90
+```
+
+The selected model is validated against the exact required ID; a different configured model fails configuration instead of silently substituting another model. The API key is read only by FastAPI, sent as a server-side Bearer header, and is never included in browser JavaScript, logs, or API responses. OpenRouter requests strict JSON Schema output and asks the router to select only endpoints that support the requested parameters. See [OpenRouter structured outputs](https://openrouter.ai/docs/guides/features/structured-outputs).
+
+When `AI_PROVIDER=openrouter`, the current mission setup is sent for mission generation. For a session review, the current mission, submitted match statistics, and the player's optional notes are sent because the notes can inform the review. Progression context is limited to recent coaching-relevant fields; prior notes, session IDs, mission titles, and long prior plan text are excluded. Relevant JobiGo data therefore leaves the hosting environment and is processed by OpenRouter and the upstream inference provider(s) it routes to. Review their current privacy/data-retention terms before using real personal data. Production requires a valid OpenRouter API key and network access; no real API call is used by the automated test suite.
 
 ## Configuration and health checks
 
@@ -71,12 +93,17 @@ Copy `.env.example` to `.env`. Supported settings:
 | `GEMMA_MODEL` | `gemma3:4b` | Ollama model tag. |
 | `GEMMA_BASE_URL` | `http://localhost:11434` | Ollama-compatible service base URL. |
 | `GEMMA_TIMEOUT_SECONDS` | `90` | Per-request model timeout. |
+| `AI_PROVIDER` | `ollama` | Selects `ollama` for local inference or `openrouter` for managed inference. |
+| `OPENROUTER_API_KEY` | empty | Required server-side key when `AI_PROVIDER=openrouter`; never place in frontend code. |
+| `OPENROUTER_MODEL` | `google/gemma-3-4b-it` | Exact production model. Other values are rejected when OpenRouter is selected. |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter-compatible API base URL. |
+| `OPENROUTER_TIMEOUT_SECONDS` | `90` | Per-request OpenRouter timeout. |
 | `ELEVENLABS_API_KEY` | empty | Optional server-side ElevenLabs credential; never expose it in frontend code. |
 | `ELEVENLABS_VOICE_ID` | empty | Optional ElevenLabs voice identifier. Voice is unavailable until both voice variables are configured. |
 | `ELEVENLABS_MODEL_ID` | `eleven_multilingual_v2` | ElevenLabs text-to-speech model. |
 | `DATA_FILE` | `<project>/data/sessions.json` | Local history path. The `.env.example` value is relative to the process working directory. |
 
-`GET /health` is a liveness check for the FastAPI process only. `GET /ready` separately checks whether Ollama responds and the configured model is installed; it returns `503` if not. Model availability does not block application startup.
+`GET /health` is a liveness check for the FastAPI process only. `GET /ready` checks the selected provider: for Ollama it checks the local model list, and for OpenRouter it checks that the configured key can access the model catalog and that the exact required model is listed. It returns `503` if the selected provider is not ready. Provider unavailability does not block application startup.
 
 ## API
 
@@ -90,7 +117,7 @@ Copy `.env.example` to `.env`. Supported settings:
 
 ## Privacy, security, and current limitations
 
-- The local default keeps prompts and session history on the machine running JobiGo, provided `GEMMA_BASE_URL` remains local.
+- The local Ollama path keeps prompts and session history on the machine running JobiGo, provided `GEMMA_BASE_URL` remains local. The OpenRouter path sends current mission data and submitted session notes to OpenRouter for inference, as described above.
 - There are no accounts or authentication. `POST /api/sessions` accepts submissions without identity or authorization and returns a review to the caller. Do not expose the service publicly until access control, abuse controls, and a privacy plan are added.
 - `GET /api/sessions` exposes only a count, but this does not protect the write endpoint or make public deployment safe.
 - The local JSON store is not a shared or concurrency-safe production database.
@@ -103,13 +130,13 @@ Copy `.env.example` to `.env`. Supported settings:
 
 - **ElevenLabs:** optional spoken mission briefings are integrated through `VoiceProvider`. Add `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` to the untracked local `.env` to enable **🎧 COACH ME**. No live credentials are included in the repository; without them, the written mission remains usable. The feature uses the ElevenLabs streaming text-to-speech API and requires network access.
 - **Backboard:** not integrated. Recent structured session history is passed directly to Gemma; no hosted memory service is used.
-- **Render:** not deployed or deployment-complete. Render cannot reach a developer machine's `localhost:11434`. A deployment needs reachable Gemma inference, a persistent database or disk for session history, a production start command using Render's `PORT` and `0.0.0.0`, and access control before public use. A JSON file on an ephemeral filesystem would not survive restarts or deploys.
+- **Render:** not deployed or deployment-complete. The OpenRouter provider supplies a remotely reachable Gemma inference option, but JobiGo still needs a persistent database or disk for session history, a production start command using Render's `PORT` and `0.0.0.0`, and access control before public use. A JSON file on an ephemeral filesystem would not survive restarts or deploys. For local Ollama mode, Render cannot reach a developer machine's `localhost:11434`.
 
 `APP_ENV=production` disables FastAPI's interactive docs; it does **not** add authentication, durable storage, remote-model access, or other production protections. For same-origin hosting, leave `CORS_ALLOWED_ORIGINS` empty. If hosting the frontend separately, set only its exact origin(s).
 
 ## Tests
 
-The `unittest` suite covers request validation, structured-output parsing, mission constraints, API flows with mock AI and voice providers, voice script completeness and failure handling, safe progress output, readiness/liveness responses, session storage, and progression helpers. ElevenLabs HTTP success, API error, and network error behavior are tested with an in-process HTTP transport; tests never call the live service:
+The `unittest` suite covers request validation, structured-output parsing, mission constraints, API flows with mock AI and voice providers, voice script completeness and failure handling, safe progress output, readiness/liveness responses, session storage, and progression helpers. Ollama, OpenRouter, and ElevenLabs adapter tests use in-process mocked HTTP transports; tests do not call live AI services or spend API credits:
 
 ```bash
 python -m unittest discover -s tests -v

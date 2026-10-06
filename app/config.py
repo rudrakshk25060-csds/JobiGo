@@ -12,6 +12,13 @@ load_dotenv(ROOT / ".env")
 
 @dataclass(frozen=True)
 class Settings:
+    ai_provider: str = os.getenv("AI_PROVIDER", "ollama").strip().lower()
+    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
+    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "google/gemma-3-4b-it").strip()
+    openrouter_base_url: str = os.getenv(
+        "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+    ).rstrip("/")
+    openrouter_timeout_seconds: float = float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "90"))
     environment: str = os.getenv("APP_ENV", "development").strip().lower()
     cors_allowed_origins: tuple[str, ...] = tuple(
         origin.strip()
@@ -29,6 +36,12 @@ class Settings:
     def __post_init__(self) -> None:
         if self.environment not in {"development", "production"}:
             raise ValueError("APP_ENV must be 'development' or 'production'.")
+        if self.ai_provider not in {"ollama", "openrouter"}:
+            raise ValueError("AI_PROVIDER must be 'ollama' or 'openrouter'.")
+        if self.ai_provider == "openrouter" and self.openrouter_model != "google/gemma-3-4b-it":
+            raise ValueError("OPENROUTER_MODEL must be exactly 'google/gemma-3-4b-it'.")
+        if self.openrouter_timeout_seconds <= 0:
+            raise ValueError("OPENROUTER_TIMEOUT_SECONDS must be positive.")
 
     @property
     def gemma_chat_url(self) -> str:
@@ -37,6 +50,14 @@ class Settings:
     @property
     def gemma_tags_url(self) -> str:
         return f"{self.gemma_base_url}/api/tags"
+
+    @property
+    def openrouter_chat_url(self) -> str:
+        return f"{self.openrouter_base_url}/chat/completions"
+
+    @property
+    def openrouter_models_url(self) -> str:
+        return f"{self.openrouter_base_url}/models"
 
 
 settings = Settings()
