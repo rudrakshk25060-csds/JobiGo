@@ -31,7 +31,7 @@ Production: AIProvider -> OpenRouterGemmaProvider -> OpenRouter -> google/gemma-
 
 The provider abstraction keeps local development independent of the production inference transport. Gemma remains the AI model in both paths; OpenRouter is a managed inference layer, not a replacement model. ElevenLabs remains a separate optional voice integration.
 
-Completed sessions are stored in SQLite at `DATA_FILE`, with at most 100 records retained. SQLite transactions, WAL journaling, and a busy timeout serialize concurrent writes and recover committed data after process restarts. If an older local `sessions.json` exists next to the configured database path, JobiGo imports its last 100 records once and leaves the JSON file as a backup. Keep the Render service at one instance: its persistent disk is attached to that instance and cannot be shared or used for multi-instance scaling.
+Completed sessions are stored in SQLite at `DATA_FILE`, with at most 100 records retained. SQLite transactions, WAL journaling, and a busy timeout serialize concurrent writes while the database file remains available. If an older local `sessions.json` exists next to the configured database path, JobiGo imports its last 100 records once and leaves the JSON file as a backup. Local history remains on your computer. Render Free uses an ephemeral filesystem, so session history can disappear after a restart, redeploy, or spin-down; it is not durable storage.
 
 Text-to-speech is a separate, optional `VoiceProvider` integration. `ElevenLabsVoiceProvider` receives a concise script built from the current mission and returns MP3 audio on demand. The API key stays on the server; audio is not persisted. Missing credentials, provider errors, or network failures leave the written mission and **GO OUTSIDE** action available. Gemma remains the core coach for mission creation and session review.
 
@@ -101,7 +101,7 @@ Copy `.env.example` to `.env`. Supported settings:
 | `ELEVENLABS_API_KEY` | empty | Optional server-side ElevenLabs credential; never expose it in frontend code. |
 | `ELEVENLABS_VOICE_ID` | empty | Optional ElevenLabs voice identifier. Voice is unavailable until both voice variables are configured. |
 | `ELEVENLABS_MODEL_ID` | `eleven_multilingual_v2` | ElevenLabs text-to-speech model. |
-| `DATA_FILE` | `<project>/data/sessions.sqlite3` | SQLite database path. Local paths are relative to the process working directory; Render uses `/var/data/sessions.sqlite3` on its disk. |
+| `DATA_FILE` | `<project>/data/sessions.sqlite3` | SQLite database path. Local paths are relative to the process working directory. The Render Free Blueprint uses `./data/sessions.sqlite3` on its ephemeral service filesystem. |
 | `DEMO_ACCESS_USERNAME` | `jobigo` | Username for the shared HTTP Basic private-demo credential. |
 | `DEMO_ACCESS_TOKEN` | empty locally | Shared password/token for protected write operations; required when `APP_ENV=production`. Set it only in Render's secret settings for deployment. |
 
@@ -134,20 +134,20 @@ Copy `.env.example` to `.env`. Supported settings:
 - **ElevenLabs:** optional spoken mission briefings are integrated through `VoiceProvider`. Add `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` to the untracked local `.env` to enable **🎧 COACH ME**. No live credentials are included in the repository; without them, the written mission remains usable. The feature uses the ElevenLabs streaming text-to-speech API and requires network access.
 - **Backboard:** not integrated. Recent structured session history is passed directly to Gemma; no hosted memory service is used.
 - **Privacy:** OpenRouter receives the current mission setup, the mission being reviewed, submitted statistics and notes, and a reduced coaching-history summary. Prior notes, session IDs, mission titles, and long plan text are excluded from history context. ElevenLabs receives only the short spoken mission script; no session notes are included in that script.
-- **Render:** prepared in `render.yaml`, but not deployed. It specifies a Singapore Starter web service, one Uvicorn worker, a 1 GB persistent disk at `/var/data`, and `DATA_FILE=/var/data/sessions.sqlite3`. Render preserves files only under the disk mount; a persistent disk requires a paid service plan and prevents scaling to multiple instances. For local Ollama mode, Render cannot reach a developer machine's `localhost:11434`.
+- **Render:** prepared in `render.yaml`, but not deployed. It specifies one Singapore Free Python web service and one Uvicorn worker, with no disk or database. Production uses OpenRouter and `google/gemma-3-4b-it`; Render does not need or use local Ollama. SQLite writes to `./data/sessions.sqlite3` on Render's ephemeral filesystem. Render may spin the service down after 15 minutes without incoming traffic, and local filesystem changes are lost on spin-down, restart, or redeploy. The free deployment is intended for a controlled hackathon demonstration, not production SaaS or durable session history. See [Render Free services](https://render.com/docs/free) and [Render web services](https://render.com/docs/web-services).
 
-`APP_ENV=production` disables FastAPI's interactive docs and requires `DEMO_ACCESS_TOKEN`. The Render Blueprint supplies the durable disk and remote Gemma provider configuration; it does not create a Render service until you explicitly create/sync the Blueprint.
+`APP_ENV=production` disables FastAPI's interactive docs and requires `DEMO_ACCESS_TOKEN`. The Render Blueprint configures the Free web service and remote Gemma provider; it does not create a Render service until you explicitly create/sync the Blueprint.
 
 ### Render deployment steps (not yet performed)
 
 1. Push this repository to the Git provider you want Render to read, then create a new **Blueprint** in Render and connect that repository. Render reads the checked-in `render.yaml`.
-2. Choose the paid Starter plan shown in the Blueprint; the Free plan cannot attach the persistent disk required by this configuration.
-3. In the Blueprint setup prompt/dashboard, set `OPENROUTER_API_KEY` and a long random `DEMO_ACCESS_TOKEN`. Keep both as secrets and never put them in Git or frontend code. Give demo participants the username `jobigo` and token privately.
+2. Keep the service on the **Free** plan specified in the Blueprint. It creates only the web service and asks for no payment method or paid storage resource.
+3. In the Render Dashboard, set `OPENROUTER_API_KEY` and a long random `DEMO_ACCESS_TOKEN` as secret environment variables. Keep both out of Git and frontend code. Give demo participants the username `jobigo` and token privately. Optional voice requires `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`; `ELEVENLABS_MODEL_ID` may also be set.
 4. Keep `CORS_ALLOWED_ORIGINS` unset for the bundled same-origin frontend. If you later serve the frontend elsewhere, set a comma-separated list of exact `https://` origins.
 5. After deployment, check `/health` and `/ready`. `/ready` verifies OpenRouter connectivity and model listing only; make one controlled generation request using the private demo credential to verify actual inference.
-6. Confirm a session survives a service restart before inviting participants. The mounted disk path is `/var/data`; the SQLite file is `/var/data/sessions.sqlite3`.
+6. Session history is in `./data/sessions.sqlite3` on Render Free's ephemeral filesystem. It supports the mission-to-session-review flow while available, but can be lost during spin-down, restart, or redeploy. Do not use it for durable user data.
 
-Render requires the web service to listen on `0.0.0.0` and its `PORT` environment variable; the Blueprint start command configures both. Render docs note disks are attached to one service instance and stop zero-downtime instance swaps, so deploys can have a short interruption. See [Render web services](https://render.com/docs/web-services), [persistent disks](https://render.com/docs/disks), and [health checks](https://render.com/docs/health-checks).
+Render requires the web service to listen on `0.0.0.0` and its `PORT` environment variable; the Blueprint start command configures both. Free services spin down after 15 minutes of inactivity and can take about a minute to start again. Filesystem changes, including the SQLite history, are lost after spin-down, restart, or redeploy. See [Render Free services](https://render.com/docs/free), [Render web services](https://render.com/docs/web-services), and [health checks](https://render.com/docs/health-checks).
 
 ## Tests
 

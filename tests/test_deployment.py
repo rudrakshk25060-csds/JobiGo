@@ -170,20 +170,28 @@ class DeploymentPreparationTests(unittest.TestCase):
             response = client.get("/", headers={"Origin": "https://demo.example"})
             self.assertNotIn("access-control-allow-origin", response.headers)
 
-    def test_production_process_configuration_uses_one_worker_and_health_liveness(self):
+    def test_render_free_blueprint_uses_ephemeral_sqlite_and_health_liveness(self):
         render = Path(__file__).resolve().parents[1] / "render.yaml"
         content = render.read_text(encoding="utf-8")
-        self.assertIn("numInstances: 1", content)
+        self.assertIn("type: web", content)
+        self.assertIn("plan: free", content)
+        self.assertEqual(content.count("type: web"), 1)
         self.assertIn("--workers 1", content)
         self.assertIn("--host 0.0.0.0 --port $PORT", content)
         self.assertIn("healthCheckPath: /health", content)
         self.assertIn("DATA_FILE", content)
-        self.assertIn("/var/data/sessions.sqlite3", content)
+        self.assertIn("./data/sessions.sqlite3", content)
         self.assertIn("APP_ENV", content)
         self.assertIn("AI_PROVIDER", content)
+        self.assertIn("value: openrouter", content)
+        self.assertIn("google/gemma-3-4b-it", content)
         self.assertIn("OPENROUTER_API_KEY", content)
         self.assertIn("DEMO_ACCESS_TOKEN", content)
         self.assertNotIn("OLLAMA_", content)
+        self.assertNotIn("disk:", content)
+        self.assertNotIn("Starter", content)
+        self.assertNotIn("/var/data", content)
+        self.assertIn("sync: false", content)
         self.assertEqual(main.health(), {"status": "ok", "check": "application_liveness"})
 
     def test_corrupt_database_error_does_not_reveal_filesystem_path(self):
