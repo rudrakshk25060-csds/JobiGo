@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from secrets import compare_digest
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
 from app.ai.base import (
@@ -38,17 +40,43 @@ app = FastAPI(
     redoc_url="/redoc" if settings.environment == "development" else None,
     openapi_url="/openapi.json" if settings.environment == "development" else None,
 )
-if "*" in settings.cors_allowed_origins:
-    raise ValueError("CORS_ALLOWED_ORIGINS must list exact origins; wildcard origins are not allowed.")
-if settings.cors_allowed_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings.cors_allowed_origins),
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
-        allow_credentials=False,
-    )
+
+
+def configure_cors(application: FastAPI, allowed_origins: tuple[str, ...]) -> None:
+    if "*" in allowed_origins:
+        raise ValueError("CORS_ALLOWED_ORIGINS must list exact origins; wildcard origins are not allowed.")
+    if allowed_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(allowed_origins),
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type", "Authorization"],
+            allow_credentials=True,
+        )
+
+
+configure_cors(app, settings.cors_allowed_origins)
 app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="static")
+
+demo_basic = HTTPBasic(auto_error=False)
+
+
+def require_demo_access(credentials: HTTPBasicCredentials | None = Depends(demo_basic)) -> None:
+    """Require the shared demo credential when configured; local development stays frictionless."""
+    if not settings.demo_access_token and settings.environment != "production":
+        return
+    valid_username = credentials is not None and compare_digest(
+        credentials.username, settings.demo_access_username
+    )
+    valid_token = credentials is not None and compare_digest(
+        credentials.password, settings.demo_access_token
+    )
+    if not (valid_username and valid_token):
+        raise HTTPException(
+            status_code=401,
+            detail="Enter the JobiGo private-demo credentials to continue.",
+            headers={"WWW-Authenticate": 'Basic realm="JobiGo private demo", charset="UTF-8"'},
+        )
 
 
 def get_ai_provider() -> AIProvider:
@@ -115,7 +143,7 @@ async def readiness(provider: AIProvider = Depends(get_ai_provider)) -> dict[str
 @app.get("/api/sessions", response_model=SessionProgress)
 def list_sessions(store: SessionStore = Depends(get_store)) -> SessionProgress:
     try:
-        return SessionProgress(session_count=len(store.list_sessions(limit=100)))
+        return SessionProgress(session_count=store.session_count())
     except SessionStoreError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -125,6 +153,7 @@ async def create_mission(
     setup: MissionSetup,
     provider: AIProvider = Depends(get_ai_provider),
     store: SessionStore = Depends(get_store),
+    _access: None = Depends(require_demo_access),
 ) -> MissionResponse:
     history = recent_history(store)
     try:
@@ -139,6 +168,7 @@ async def mission_voice(
     mission_id: str,
     request: MissionVoiceRequest,
     provider: VoiceProvider = Depends(get_voice_provider),
+    _access: None = Depends(require_demo_access),
 ) -> Response:
     """Return optional spoken audio for the browser-held mission; do not persist it."""
     if mission_id != request.mission_id:
@@ -162,6 +192,7 @@ async def complete_session(
     submission: SessionSubmission,
     provider: AIProvider = Depends(get_ai_provider),
     store: SessionStore = Depends(get_store),
+    _access: None = Depends(require_demo_access),
 ) -> SessionRecord:
     history = recent_history(store)
     try:

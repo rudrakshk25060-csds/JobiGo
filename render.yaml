@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: jobigo-demo
+    runtime: python
+    region: singapore
+    plan: starter
+    numInstances: 1
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    disk:
+      name: jobigo-session-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: AI_PROVIDER
+        value: openrouter
+      - key: OPENROUTER_MODEL
+        value: google/gemma-3-4b-it
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: OPENROUTER_TIMEOUT_SECONDS
+        value: "90"
+      - key: DATA_FILE
+        value: /var/data/sessions.sqlite3
+      - key: DEMO_ACCESS_USERNAME
+        value: jobigo
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: DEMO_ACCESS_TOKEN
+        sync: false
