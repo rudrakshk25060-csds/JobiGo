@@ -1,6 +1,7 @@
+
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -19,6 +20,59 @@ from app.config import Settings
 
 T = TypeVar("T", bound=BaseModel)
 REQUIRED_MODEL = "google/gemma-3-4b-it"
+_OPENROUTER_UNSUPPORTED_KEYS = {
+    "title",
+    "default",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "pattern",
+    "format",
+    "examples",
+}
+
+
+def _openrouter_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """Convert Pydantic's schema into a provider-friendly strict JSON Schema."""
+    raw = model.model_json_schema()
+    definitions = raw.get("$defs", {})
+
+    def clean(node: Any, resolving: tuple[str, ...] = ()) -> Any:
+        if isinstance(node, list):
+            return [clean(item, resolving) for item in node]
+
+        if not isinstance(node, dict):
+            return node
+
+        if "$ref" in node:
+            ref_name = node["$ref"].rsplit("/", 1)[-1]
+            if ref_name in resolving:
+                raise ValueError(f"Circular schema reference: {ref_name}")
+            if ref_name not in definitions:
+                raise ValueError(f"Unknown schema reference: {ref_name}")
+            return clean(definitions[ref_name], resolving + (ref_name,))
+
+        result = {
+            key: clean(value, resolving)
+            for key, value in node.items()
+            if key not in _OPENROUTER_UNSUPPORTED_KEYS
+            and key not in {"$defs", "$schema"}
+        }
+
+        if result.get("type") == "object":
+            properties = result.get("properties")
+            if isinstance(properties, dict):
+                result["required"] = list(properties.keys())
+            result["additionalProperties"] = False
+
+        return result
+
+    return clean(raw)
 
 
 class OpenRouterGemmaProvider(GemmaProvider):
@@ -83,7 +137,7 @@ class OpenRouterGemmaProvider(GemmaProvider):
                 "json_schema": {
                     "name": schema.__name__.lower(),
                     "strict": True,
-                    "schema": schema.model_json_schema(),
+                    "schema": _openrouter_schema(schema),
                 },
             },
             # Ensure routing only considers endpoints advertising the requested schema support.
