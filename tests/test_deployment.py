@@ -184,7 +184,7 @@ class DeploymentPreparationTests(unittest.TestCase):
         self.assertIn("APP_ENV", content)
         self.assertIn("AI_PROVIDER", content)
         self.assertIn("value: openrouter", content)
-        self.assertIn("google/gemma-3-4b-it:free", content)
+        self.assertIn("google/gemma-3-4b-it", content)
         self.assertIn("OPENROUTER_API_KEY", content)
         self.assertIn("DEMO_ACCESS_TOKEN", content)
         self.assertNotIn("OLLAMA_", content)

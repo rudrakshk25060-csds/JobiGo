@@ -71,7 +71,7 @@ class OpenRouterTests(unittest.TestCase):
 
     def test_successful_mission_uses_exact_model_and_json_schema_routing(self):
         seen = {}
-        self.assertEqual(REQUIRED_MODEL, "google/gemma-3-4b-it:free")
+        self.assertEqual(REQUIRED_MODEL, "google/gemma-3-4b-it")
 
         def handler(request):
             seen["url"] = str(request.url)

@@ -14,7 +14,7 @@ load_dotenv(ROOT / ".env")
 class Settings:
     ai_provider: str = os.getenv("AI_PROVIDER", "ollama").strip().lower()
     openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
-    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "google/gemma-3-4b-it:free").strip()
+    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "google/gemma-3-4b-it").strip()
     openrouter_base_url: str = os.getenv(
         "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
     ).rstrip("/")
@@ -42,8 +42,8 @@ class Settings:
             raise ValueError("APP_ENV must be 'development' or 'production'.")
         if self.ai_provider not in {"ollama", "openrouter"}:
             raise ValueError("AI_PROVIDER must be 'ollama' or 'openrouter'.")
-        if self.ai_provider == "openrouter" and self.openrouter_model != "google/gemma-3-4b-it:free":
-            raise ValueError("OPENROUTER_MODEL must be exactly 'google/gemma-3-4b-it:free'.")
+        if self.ai_provider == "openrouter" and self.openrouter_model != "google/gemma-3-4b-it":
+            raise ValueError("OPENROUTER_MODEL must be exactly 'google/gemma-3-4b-it'.")
         if self.openrouter_timeout_seconds <= 0:
             raise ValueError("OPENROUTER_TIMEOUT_SECONDS must be positive.")
         if self.environment == "production" and not self.demo_access_token.strip():
