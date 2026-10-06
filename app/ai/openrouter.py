@@ -220,6 +220,15 @@ class OpenRouterGemmaProvider(GemmaProvider):
                     raise AIProviderUpstreamFailure(
                         "OpenRouter is temporarily unavailable. Please try again."
                     )
+                if response.status_code == 402:
+                    logger.warning(
+                        "OpenRouter rejected request for account billing: %s",
+                        _safe_upstream_error(response, self.config),
+                    )
+                    raise AIProviderUpstreamFailure(
+                        "OpenRouter reports insufficient account credits or spending allowance. "
+                        "Add credits or configure a key from a funded account."
+                    )
                 if response.is_error:
                     logger.warning(
                         "OpenRouter rejected structured Gemma request: %s",

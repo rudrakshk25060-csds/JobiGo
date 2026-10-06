@@ -162,6 +162,23 @@ class OpenRouterTests(unittest.TestCase):
         self.assertNotIn("private input", logs)
         self.assertNotIn(API_KEY, str(raised.exception))
 
+    def test_payment_required_explains_credit_block_without_exposing_upstream_body(self):
+        def handler(_request):
+            return httpx.Response(402, json={
+                "error": {
+                    "code": 402,
+                    "message": f"Insufficient credits for key {API_KEY}",
+                }
+            })
+
+        with self.assertLogs("app.ai.openrouter", level="WARNING") as captured:
+            with self.assertRaises(AIProviderUpstreamFailure) as raised:
+                asyncio.run(self.provider(handler)._complete("coach", "{}", Mission))
+        self.assertIn("insufficient account credits", str(raised.exception).lower())
+        self.assertIn("funded account", str(raised.exception).lower())
+        self.assertNotIn(API_KEY, str(raised.exception))
+        self.assertNotIn(API_KEY, "\n".join(captured.output))
+
     def test_openrouter_schema_is_flattened_and_strictly_closed(self):
         schema = _openrouter_schema(Mission)
         encoded = json.dumps(schema)
