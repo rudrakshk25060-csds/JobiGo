@@ -94,7 +94,7 @@ class GemmaProvider:
             return parse_structured_output(raw, schema)
         except (ValueError, ValidationError) as exc:
             raise AIProviderInvalidOutput(
-                "Gemma returned a response that did not match the required structure. Please retry."
+                f"Gemma returned an invalid structured response: {exc}"
             ) from exc
 
     async def generate_mission(self, setup: MissionSetup, history: list[dict]) -> Mission:
@@ -110,8 +110,8 @@ class GemmaProvider:
             "Every drill and the challenge must directly train the selected goal; do not substitute passing for finishing. "
             "For finishing with football_only, practice controlled shooting technique at an imaginary target area in "
             "open space, then retrieve the ball at a walk; do not require a physical target. "
-            "Keep all timed activities within the selected duration. Avoid roads, traffic, unsafe surfaces, maximal or "
-            "explosive effort, collisions, and medical claims. Include a warm-up, drills, a measurable challenge, "
+            "Keep all timed activities within the selected duration: the sum of warmup_minutes, cooldown_minutes, and all drill duration_minutes must not exceed duration_minutes. "
+            "Avoid roads, traffic, unsafe surfaces, maximal or explosive effort, collisions, and medical claims. Include a warm-up, drills, a measurable challenge, "
             "cooldown, motivation, and a short safety note."
         )
         inputs = {
