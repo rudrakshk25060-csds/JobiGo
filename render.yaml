@@ -18,11 +18,19 @@ services:
         value: https://openrouter.ai/api/v1
       - key: OPENROUTER_TIMEOUT_SECONDS
         value: "90"
+      - key: HF_MODEL
+        value: google/gemma-3-4b-it
+      - key: HF_BASE_URL
+        value: https://router.huggingface.co/v1
+      - key: HF_TIMEOUT_SECONDS
+        value: "90"
       - key: DATA_FILE
         value: ./data/sessions.sqlite3
       - key: DEMO_ACCESS_USERNAME
         value: jobigo
       - key: OPENROUTER_API_KEY
+        sync: false
+      - key: HF_TOKEN
         sync: false
       - key: DEMO_ACCESS_TOKEN
         sync: false

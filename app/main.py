@@ -23,6 +23,7 @@ from app.ai.base import (
     AIProviderUpstreamFailure,
 )
 from app.ai.gemma import GemmaProvider
+from app.ai.huggingface import HuggingFaceGemmaProvider
 from app.ai.openrouter import OpenRouterGemmaProvider
 from app.config import ROOT, settings
 from app.models import MissionResponse, MissionSetup, SessionProgress, SessionRecord, SessionSubmission
@@ -82,6 +83,8 @@ def require_demo_access(credentials: HTTPBasicCredentials | None = Depends(demo_
 def get_ai_provider() -> AIProvider:
     if settings.ai_provider == "openrouter":
         return OpenRouterGemmaProvider(settings)
+    if settings.ai_provider == "huggingface":
+        return HuggingFaceGemmaProvider(settings)
     return GemmaProvider(settings)
 
 

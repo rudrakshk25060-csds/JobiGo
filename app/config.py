@@ -19,6 +19,10 @@ class Settings:
         "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
     ).rstrip("/")
     openrouter_timeout_seconds: float = float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "90"))
+    hf_token: str = os.getenv("HF_TOKEN", "")
+    hf_model: str = os.getenv("HF_MODEL", "google/gemma-3-4b-it").strip()
+    hf_base_url: str = os.getenv("HF_BASE_URL", "https://router.huggingface.co/v1").rstrip("/")
+    hf_timeout_seconds: float = float(os.getenv("HF_TIMEOUT_SECONDS", "90"))
     environment: str = os.getenv("APP_ENV", "development").strip().lower()
     cors_allowed_origins: tuple[str, ...] = tuple(
         origin.strip()
@@ -40,12 +44,16 @@ class Settings:
     def __post_init__(self) -> None:
         if self.environment not in {"development", "production"}:
             raise ValueError("APP_ENV must be 'development' or 'production'.")
-        if self.ai_provider not in {"ollama", "openrouter"}:
-            raise ValueError("AI_PROVIDER must be 'ollama' or 'openrouter'.")
+        if self.ai_provider not in {"ollama", "openrouter", "huggingface"}:
+            raise ValueError("AI_PROVIDER must be 'ollama', 'openrouter', or 'huggingface'.")
         if self.ai_provider == "openrouter" and self.openrouter_model != "google/gemma-3-4b-it":
             raise ValueError("OPENROUTER_MODEL must be exactly 'google/gemma-3-4b-it'.")
         if self.openrouter_timeout_seconds <= 0:
             raise ValueError("OPENROUTER_TIMEOUT_SECONDS must be positive.")
+        if self.ai_provider == "huggingface" and self.hf_model != "google/gemma-3-4b-it":
+            raise ValueError("HF_MODEL must be exactly 'google/gemma-3-4b-it'.")
+        if self.hf_timeout_seconds <= 0:
+            raise ValueError("HF_TIMEOUT_SECONDS must be positive.")
         if self.environment == "production" and not self.demo_access_token.strip():
             raise ValueError("DEMO_ACCESS_TOKEN is required when APP_ENV=production.")
 
@@ -68,6 +76,14 @@ class Settings:
     @property
     def openrouter_model_endpoints_url(self) -> str:
         return f"{self.openrouter_base_url}/models/{self.openrouter_model}/endpoints"
+
+    @property
+    def hf_chat_url(self) -> str:
+        return f"{self.hf_base_url}/chat/completions"
+
+    @property
+    def hf_model_metadata_url(self) -> str:
+        return f"https://huggingface.co/api/models/{self.hf_model}"
 
 
 settings = Settings()

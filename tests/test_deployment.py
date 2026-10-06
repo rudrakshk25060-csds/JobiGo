@@ -186,6 +186,8 @@ class DeploymentPreparationTests(unittest.TestCase):
         self.assertIn("value: openrouter", content)
         self.assertIn("google/gemma-3-4b-it", content)
         self.assertIn("OPENROUTER_API_KEY", content)
+        self.assertIn("HF_TOKEN", content)
+        self.assertIn("key: HF_TOKEN\n        sync: false", content)
         self.assertIn("DEMO_ACCESS_TOKEN", content)
         self.assertNotIn("OLLAMA_", content)
         self.assertNotIn("disk:", content)
