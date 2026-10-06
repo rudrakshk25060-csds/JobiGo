@@ -20,12 +20,15 @@ The UI is intentionally focused on the outdoor session; it is not a statistics d
 Browser (HTML / CSS / JavaScript)
   ├── GET /api/sessions ──> count-only progress response
   ├── POST /api/missions ─> FastAPI validation -> AIProvider -> GemmaProvider -> Ollama -> Gemma 3 4B
+  ├── POST /api/missions/{mission_id}/voice -> VoiceProvider -> ElevenLabs streaming TTS -> MP3
   └── POST /api/sessions -> FastAPI validation -> Gemma review + next-session recommendation -> local JSON history
 ```
 
 `AIProvider` defines mission generation, session evaluation, next-session recommendations, and readiness checks. `GemmaProvider` calls Ollama's local `/api/chat` endpoint, supplies a Pydantic JSON Schema through Ollama's `format` option, and validates responses. Mission constraints are checked against the selected time, goal, and equipment. A single correction attempt is made for a mismatch; invalid output or unavailable AI produces an explicit API error rather than mock output.
 
 Completed sessions are stored as JSON at `DATA_FILE`, with at most 100 records retained. File replacement is atomic against partial writes, but the store is intended for a local, single-process MVP; concurrent writes and multiple server workers can lose updates.
+
+Text-to-speech is a separate, optional `VoiceProvider` integration. `ElevenLabsVoiceProvider` receives a concise script built from the current mission and returns MP3 audio on demand. The API key stays on the server; audio is not persisted. Missing credentials, provider errors, or network failures leave the written mission and **GO OUTSIDE** action available. Gemma remains the core coach for mission creation and session review.
 
 ## Gemma and Ollama setup
 
@@ -68,6 +71,9 @@ Copy `.env.example` to `.env`. Supported settings:
 | `GEMMA_MODEL` | `gemma3:4b` | Ollama model tag. |
 | `GEMMA_BASE_URL` | `http://localhost:11434` | Ollama-compatible service base URL. |
 | `GEMMA_TIMEOUT_SECONDS` | `90` | Per-request model timeout. |
+| `ELEVENLABS_API_KEY` | empty | Optional server-side ElevenLabs credential; never expose it in frontend code. |
+| `ELEVENLABS_VOICE_ID` | empty | Optional ElevenLabs voice identifier. Voice is unavailable until both voice variables are configured. |
+| `ELEVENLABS_MODEL_ID` | `eleven_multilingual_v2` | ElevenLabs text-to-speech model. |
 | `DATA_FILE` | `<project>/data/sessions.json` | Local history path. The `.env.example` value is relative to the process working directory. |
 
 `GET /health` is a liveness check for the FastAPI process only. `GET /ready` separately checks whether Ollama responds and the configured model is installed; it returns `503` if not. Model availability does not block application startup.
@@ -79,6 +85,7 @@ Copy `.env.example` to `.env`. Supported settings:
 - `GET /ready` — configured Gemma/Ollama readiness
 - `GET /api/sessions` — only `{"session_count": N}`; it does not return notes, records, or identifiers
 - `POST /api/missions` — validate setup and generate a mission
+- `POST /api/missions/{mission_id}/voice` — accept the current mission and return `audio/mpeg`; this endpoint uses ElevenLabs only when requested and does not save audio
 - `POST /api/sessions` — evaluate a submitted report, recommend the next session, save it, and return the review to the submitting caller
 
 ## Privacy, security, and current limitations
@@ -94,7 +101,7 @@ Copy `.env.example` to `.env`. Supported settings:
 
 ## Integrations and deployment status
 
-- **ElevenLabs:** not integrated. The app currently has no text-to-speech or audio playback feature.
+- **ElevenLabs:** optional spoken mission briefings are integrated through `VoiceProvider`. Add `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` to the untracked local `.env` to enable **🎧 COACH ME**. No live credentials are included in the repository; without them, the written mission remains usable. The feature uses the ElevenLabs streaming text-to-speech API and requires network access.
 - **Backboard:** not integrated. Recent structured session history is passed directly to Gemma; no hosted memory service is used.
 - **Render:** not deployed or deployment-complete. Render cannot reach a developer machine's `localhost:11434`. A deployment needs reachable Gemma inference, a persistent database or disk for session history, a production start command using Render's `PORT` and `0.0.0.0`, and access control before public use. A JSON file on an ephemeral filesystem would not survive restarts or deploys.
 
@@ -102,7 +109,7 @@ Copy `.env.example` to `.env`. Supported settings:
 
 ## Tests
 
-The `unittest` suite covers request validation, structured-output parsing, mission constraints, API flows with a mock provider, safe progress output, readiness/liveness responses, session storage, and progression helpers:
+The `unittest` suite covers request validation, structured-output parsing, mission constraints, API flows with mock AI and voice providers, voice script completeness and failure handling, safe progress output, readiness/liveness responses, session storage, and progression helpers. ElevenLabs HTTP success, API error, and network error behavior are tested with an in-process HTTP transport; tests never call the live service:
 
 ```bash
 python -m unittest discover -s tests -v

@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.ai.base import AIProvider, AIProviderError, AIProviderInvalidOutput, AIProviderUnavailable
@@ -14,6 +14,10 @@ from app.ai.gemma import GemmaProvider
 from app.config import ROOT, settings
 from app.models import MissionResponse, MissionSetup, SessionProgress, SessionRecord, SessionSubmission
 from app.store import SessionStore, SessionStoreError
+from app.models import MissionVoiceRequest
+from app.voice.base import VoiceProvider, VoiceProviderError, VoiceProviderMisconfigured
+from app.voice.elevenlabs import ElevenLabsVoiceProvider
+from app.voice.script import build_coaching_script
 
 app = FastAPI(
     title="JobiGo",
@@ -42,6 +46,10 @@ def get_ai_provider() -> AIProvider:
 
 def get_store() -> SessionStore:
     return SessionStore(settings.data_file)
+
+
+def get_voice_provider() -> VoiceProvider:
+    return ElevenLabsVoiceProvider(settings)
 
 
 def recent_history(store: SessionStore) -> list[dict]:
@@ -98,6 +106,29 @@ async def create_mission(
     except AIProviderError as exc:
         raise HTTPException(status_code=502, detail="The AI coach could not create a mission.") from exc
     return MissionResponse(mission_id=str(uuid4()), mission=mission, ai_provider=provider.name)
+
+
+@app.post("/api/missions/{mission_id}/voice")
+async def mission_voice(
+    mission_id: str,
+    request: MissionVoiceRequest,
+    provider: VoiceProvider = Depends(get_voice_provider),
+) -> Response:
+    """Return optional spoken audio for the browser-held mission; do not persist it."""
+    if mission_id != request.mission_id:
+        raise HTTPException(status_code=400, detail="Mission ID does not match the request.")
+    script = build_coaching_script(request.mission)
+    try:
+        audio = await provider.synthesize(script)
+    except VoiceProviderMisconfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except VoiceProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(
+        content=audio,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @app.post("/api/sessions", response_model=SessionRecord)

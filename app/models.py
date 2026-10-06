@@ -137,6 +137,11 @@ class MissionResponse(StrictModel):
     ai_provider: str
 
 
+class MissionVoiceRequest(StrictModel):
+    mission_id: str = Field(min_length=8, max_length=80)
+    mission: Mission
+
+
 class SessionProgress(StrictModel):
     session_count: int = Field(ge=0)
 

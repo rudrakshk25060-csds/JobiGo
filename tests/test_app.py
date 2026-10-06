@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
+import httpx
 from fastapi.testclient import TestClient
 
 from app.ai.base import AIProviderUnavailable
-from app.main import app, get_ai_provider, get_store
+from app.main import app, get_ai_provider, get_store, get_voice_provider
 from app.models import (
     Challenge,
     Drill,
@@ -19,6 +22,10 @@ from app.models import (
     SessionReview,
 )
 from app.ai.gemma import GemmaProvider, parse_structured_output
+from app.config import settings
+from app.voice.base import VoiceProviderMisconfigured, VoiceProviderUnavailable
+from app.voice.elevenlabs import ElevenLabsVoiceProvider
+from app.voice.script import ENDING, build_coaching_script
 
 
 def build_mission(setup: MissionSetup) -> Mission:
@@ -88,6 +95,18 @@ class MockAIProvider:
         )
 
 
+class MockVoiceProvider:
+    def __init__(self, audio=b"test-mp3"):
+        self.audio = audio
+        self.script = None
+        self.failure = None
+
+    async def synthesize(self, script):
+        self.script = script
+        if self.failure:
+            raise self.failure
+        return self.audio
+
 class JobiGoTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -95,8 +114,10 @@ class JobiGoTests(unittest.TestCase):
             Path(self.temp.name) / "sessions.json"
         )
         self.provider = MockAIProvider()
+        self.voice_provider = MockVoiceProvider()
         app.dependency_overrides[get_store] = lambda: self.store
         app.dependency_overrides[get_ai_provider] = lambda: self.provider
+        app.dependency_overrides[get_voice_provider] = lambda: self.voice_provider
         self.client = TestClient(app)
 
     def tearDown(self):
@@ -240,6 +261,83 @@ class JobiGoTests(unittest.TestCase):
         response = self.client.post("/api/missions", json=self.setup_body())
         self.assertEqual(response.status_code, 503)
         self.assertIn("mock offline", response.json()["detail"])
+
+    def test_voice_endpoint_returns_audio_without_exposing_provider_secrets(self):
+        mission, _ = self.mission_and_report()
+        response = self.client.post("/api/missions/test-mission-0001/voice", json={
+            "mission_id": "test-mission-0001", "mission": mission.model_dump(mode="json")
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "audio/mpeg")
+        self.assertEqual(response.content, b"test-mp3")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertTrue(self.voice_provider.script.endswith(ENDING))
+        self.assertNotIn("xi-api-key", response.text)
+
+    def test_voice_missing_credentials_does_not_break_mission_creation(self):
+        async def missing(_script):
+            raise VoiceProviderMisconfigured("Coach audio is not configured. Your written mission is still ready.")
+        self.voice_provider.synthesize = missing
+        mission, _ = self.mission_and_report()
+        voice = self.client.post("/api/missions/test-mission-0001/voice", json={
+            "mission_id": "test-mission-0001", "mission": mission.model_dump(mode="json")
+        })
+        self.assertEqual(voice.status_code, 503)
+        self.assertEqual(self.client.post("/api/missions", json=self.setup_body()).status_code, 200)
+
+    def test_voice_upstream_failure_keeps_mission_and_go_outside_available(self):
+        self.voice_provider.failure = VoiceProviderUnavailable("Audio service failed; text mission remains available.")
+        mission, _ = self.mission_and_report()
+        voice = self.client.post("/api/missions/test-mission-0001/voice", json={
+            "mission_id": "test-mission-0001", "mission": mission.model_dump(mode="json")
+        })
+        self.assertEqual(voice.status_code, 502)
+        self.assertIn("mission remains available", voice.json()["detail"])
+        self.assertEqual(self.client.post("/api/missions", json=self.setup_body()).status_code, 200)
+
+    def test_voice_request_mission_id_must_match_path(self):
+        mission, _ = self.mission_and_report()
+        response = self.client.post("/api/missions/path-mission-id/voice", json={
+            "mission_id": "body-mission-id", "mission": mission.model_dump(mode="json")
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_coaching_script_is_concise_complete_and_ends_with_requested_line(self):
+        mission, _ = self.mission_and_report()
+        script = build_coaching_script(mission)
+        self.assertLess(len(script), 900)
+        self.assertIn("Sharp Finishing", script)
+        self.assertIn("Warm up", script)
+        self.assertIn("Challenge", script)
+        self.assertIn("Stay safe", script)
+        self.assertTrue(script.endswith("Your mission is ready. Put your phone away and go play."))
+
+    def test_elevenlabs_adapter_sends_server_side_key_and_handles_success_and_errors(self):
+        seen = {}
+        def handler(request):
+            seen["key"] = request.headers.get("xi-api-key")
+            seen["body"] = request.read().decode()
+            return httpx.Response(200, content=b"mp3", headers={"content-type": "audio/mpeg"})
+        config = replace(settings, elevenlabs_api_key="test-secret-never-return", elevenlabs_voice_id="voice-id")
+        audio = asyncio.run(ElevenLabsVoiceProvider(config, httpx.MockTransport(handler)).synthesize("short script"))
+        self.assertEqual(audio, b"mp3")
+        self.assertEqual(seen["key"], "test-secret-never-return")
+        self.assertIn('"model_id":"eleven_multilingual_v2"', seen["body"])
+
+        def api_error(_request):
+            return httpx.Response(401, json={"detail": "secret-bearing upstream response"})
+        with self.assertRaises(VoiceProviderUnavailable):
+            asyncio.run(ElevenLabsVoiceProvider(config, httpx.MockTransport(api_error)).synthesize("short script"))
+
+        def network_error(_request):
+            raise httpx.ConnectError("offline")
+        with self.assertRaises(VoiceProviderUnavailable):
+            asyncio.run(ElevenLabsVoiceProvider(config, httpx.MockTransport(network_error)).synthesize("short script"))
+
+    def test_elevenlabs_missing_credentials_are_rejected_without_network(self):
+        config = replace(settings, elevenlabs_api_key="", elevenlabs_voice_id="")
+        with self.assertRaises(VoiceProviderMisconfigured):
+            asyncio.run(ElevenLabsVoiceProvider(config).synthesize("short script"))
 
 
 if __name__ == "__main__":
