@@ -1,6 +1,9 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from typing import Any, TypeVar
 
 import httpx
@@ -20,6 +23,7 @@ from app.config import Settings
 
 T = TypeVar("T", bound=BaseModel)
 REQUIRED_MODEL = "google/gemma-3-4b-it"
+logger = logging.getLogger(__name__)
 _OPENROUTER_UNSUPPORTED_KEYS = {
     "title",
     "default",
@@ -73,6 +77,57 @@ def _openrouter_schema(model: type[BaseModel]) -> dict[str, Any]:
         return result
 
     return clean(raw)
+
+
+def _safe_upstream_error(response: httpx.Response, config: Settings) -> str:
+    """Extract only bounded provider diagnostics; never log a response body or request data."""
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        payload = {}
+
+    error = payload.get("error") if isinstance(payload, dict) else None
+    metadata = error.get("metadata") if isinstance(error, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
+    provider = metadata.get("provider_name") if isinstance(metadata, dict) else None
+    provider_code = None
+
+    # Some OpenRouter errors wrap the provider's useful message in metadata.raw.
+    raw = metadata.get("raw") if isinstance(metadata, dict) else None
+    if isinstance(raw, str):
+        try:
+            raw_payload = json.loads(raw)
+        except (ValueError, TypeError):
+            raw_payload = None
+        raw_error = raw_payload.get("error") if isinstance(raw_payload, dict) else None
+        if isinstance(raw_error, dict) and isinstance(raw_error.get("message"), str):
+            message = raw_error["message"]
+        if isinstance(raw_error, dict):
+            provider_code = raw_error.get("code")
+
+    def safe(value: Any, limit: int = 400) -> str:
+        if not isinstance(value, (str, int, float)):
+            return "unknown"
+        result = str(value)
+        for secret in (
+            config.openrouter_api_key,
+            config.demo_access_token,
+            config.elevenlabs_api_key,
+        ):
+            if secret:
+                result = result.replace(secret, "[redacted]")
+        result = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer [redacted]", result)
+        result = re.sub(r"\bsk-or-[A-Za-z0-9_-]+", "[redacted-key]", result)
+        result = re.sub(r"(?i)\b(api[_-]?key|token)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", result)
+        result = " ".join(result.split())
+        return result[:limit]
+
+    return (
+        f"status={response.status_code} code={safe(code, 80)} "
+        f"provider={safe(provider, 100)} provider_code={safe(provider_code, 80)} "
+        f"message={safe(message)}"
+    )
 
 
 class OpenRouterGemmaProvider(GemmaProvider):
@@ -166,6 +221,10 @@ class OpenRouterGemmaProvider(GemmaProvider):
                         "OpenRouter is temporarily unavailable. Please try again."
                     )
                 if response.is_error:
+                    logger.warning(
+                        "OpenRouter rejected structured Gemma request: %s",
+                        _safe_upstream_error(response, self.config),
+                    )
                     raise AIProviderUpstreamFailure(
                         "OpenRouter could not process the structured Gemma request."
                     )

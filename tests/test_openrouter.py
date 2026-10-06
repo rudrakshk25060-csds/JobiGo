@@ -19,7 +19,7 @@ from app.ai.base import (
     AIProviderUpstreamFailure,
 )
 from app.ai.gemma import GemmaProvider
-from app.ai.openrouter import OpenRouterGemmaProvider, REQUIRED_MODEL
+from app.ai.openrouter import OpenRouterGemmaProvider, REQUIRED_MODEL, _openrouter_schema
 from app.config import settings
 from app.main import app, get_ai_provider, get_store
 from app.models import (
@@ -128,6 +128,58 @@ class OpenRouterTests(unittest.TestCase):
                 with self.assertRaises(error_type) as raised:
                     asyncio.run(self.provider(handler)._complete("coach", "{}", Mission))
                 self.assertNotIn(API_KEY, str(raised.exception))
+
+    def test_rejected_schema_logs_safe_provider_diagnostic_only(self):
+        body = {
+            "error": {
+                "code": 400,
+                "message": "Provider returned error",
+                "metadata": {
+                    "provider_name": "DeepInfra",
+                    "raw": json.dumps({
+                        "error": {
+                            "code": "INVALID_ARGUMENT",
+                            "message": f"Unsupported response schema; bearer {API_KEY}"
+                        }
+                    }),
+                },
+            },
+            "debug": f"request body contains {API_KEY}",
+        }
+
+        def handler(_request):
+            return httpx.Response(400, json=body)
+
+        with self.assertLogs("app.ai.openrouter", level="WARNING") as captured:
+            with self.assertRaises(AIProviderUpstreamFailure) as raised:
+                asyncio.run(self.provider(handler)._complete("private prompt", "private input", Mission))
+        logs = "\n".join(captured.output)
+        self.assertIn("DeepInfra", logs)
+        self.assertIn("Unsupported response schema", logs)
+        self.assertIn("INVALID_ARGUMENT", logs)
+        self.assertNotIn(API_KEY, logs)
+        self.assertNotIn("private prompt", logs)
+        self.assertNotIn("private input", logs)
+        self.assertNotIn(API_KEY, str(raised.exception))
+
+    def test_openrouter_schema_is_flattened_and_strictly_closed(self):
+        schema = _openrouter_schema(Mission)
+        encoded = json.dumps(schema)
+        self.assertNotIn("$defs", encoded)
+        self.assertNotIn("$ref", encoded)
+
+        def assert_strict_objects(node):
+            if isinstance(node, dict):
+                if node.get("type") == "object":
+                    self.assertFalse(node.get("additionalProperties", True))
+                    self.assertEqual(set(node.get("required", [])), set(node.get("properties", {})))
+                for value in node.values():
+                    assert_strict_objects(value)
+            elif isinstance(node, list):
+                for value in node:
+                    assert_strict_objects(value)
+
+        assert_strict_objects(schema)
 
     def test_network_timeout_is_classified(self):
         def handler(_request):
