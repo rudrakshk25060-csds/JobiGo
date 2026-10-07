@@ -92,9 +92,17 @@ class GemmaProvider:
             ) from exc
         try:
             return parse_structured_output(raw, schema)
-        except (ValueError, ValidationError) as exc:
+        except ValidationError as exc:
+            msg = "; ".join(
+                f"{err.get('loc')[-1] if err.get('loc') else 'field'}: {err.get('msg', '')}"
+                for err in exc.errors()
+            )
             raise AIProviderInvalidOutput(
-                f"Gemma returned an invalid structured response: {exc}"
+                f"Gemma output validation error: {msg}"
+            ) from exc
+        except ValueError as exc:
+            raise AIProviderInvalidOutput(
+                f"Gemma returned invalid output: {exc}"
             ) from exc
 
     async def generate_mission(self, setup: MissionSetup, history: list[dict]) -> Mission:
@@ -110,7 +118,13 @@ class GemmaProvider:
             "Every drill and the challenge must directly train the selected goal; do not substitute passing for finishing. "
             "For finishing with football_only, practice controlled shooting technique at an imaginary target area in "
             "open space, then retrieve the ball at a walk; do not require a physical target. "
-            "Keep all timed activities within the selected duration: the sum of warmup_minutes, cooldown_minutes, and all drill duration_minutes must not exceed duration_minutes. "
+            "Drill duration budget: "
+            "For 20 min: warmup=3, cooldown=3, drills=14 min total. "
+            "For 30 min: warmup=5, cooldown=5, drills=20 min total (e.g. 2 drills of 10 min each). "
+            "For 45 min: warmup=5, cooldown=5, drills=35 min total. "
+            "For 60 min: warmup=10, cooldown=10, drills=40 min total. "
+            "For 90 min: warmup=10, cooldown=10, drills=70 min total. "
+            "The sum of warmup_minutes + cooldown_minutes + all drill duration_minutes must not exceed duration_minutes. "
             "Avoid roads, traffic, unsafe surfaces, maximal or explosive effort, collisions, and medical claims. Include a warm-up, drills, a measurable challenge, "
             "cooldown, motivation, and a short safety note."
         )
@@ -119,7 +133,7 @@ class GemmaProvider:
             "recent_sessions": self._history_context(history),
         }
         last_issue = ""
-        for attempt in range(2):
+        for attempt in range(3):
             if last_issue:
                 inputs["correction"] = (
                     f"Your previous draft failed validation: {last_issue} Fix that issue in the new JSON."
@@ -197,13 +211,12 @@ class GemmaProvider:
         report: SessionReport,
         history: list[dict],
     ) -> NextSessionRecommendation:
+        desired_goal = self._recommended_focus(review, mission.goal.value)
+        desired_time = self._next_session_time(mission.duration_minutes, report.difficulty.value)
         system = (
             "You are JobiGo, a supportive football coach. Return only JSON matching the schema. "
-            "Recommend one progressive outdoor session that directly addresses the weakness and actionable recommendation. "
-            "Use the completed mission's goal as the next goal unless the review explicitly recommends a different named skill. "
-            "Do not jump to an unrelated skill. Keep the same level and equipment. Use the player's difficulty rating: "
-            "if it was right, keep the same time; if too_easy, move up one available time step; if too_hard, move down one step. "
-            "Keep intensity safe. Give a concise, complete reason that clearly matches the selected next-session goal. "
+            f"Recommend one progressive outdoor session addressing the review. Set goal to '{desired_goal}', available_time to {desired_time}. "
+            "Keep the same level and equipment. Keep intensity safe. Give a concise, complete reason that clearly matches the selected goal. "
             "End the reason with a complete sentence."
         )
         inputs = {
@@ -211,11 +224,11 @@ class GemmaProvider:
             "completed_mission": mission.model_dump(mode="json"),
             "player_report": report.model_dump(mode="json"),
             "recent_sessions": self._history_context(history),
+            "target_goal": desired_goal,
+            "target_time": desired_time,
         }
-        desired_goal = self._recommended_focus(review, mission.goal.value)
-        desired_time = self._next_session_time(mission.duration_minutes, report.difficulty.value)
         last_issue = ""
-        for _ in range(2):
+        for _ in range(3):
             if last_issue:
                 inputs["correction"] = last_issue
             recommendation = await self._complete(
