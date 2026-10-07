@@ -158,7 +158,7 @@ class GemmaProvider:
         if setup.goal == "finishing" and not re.search(r"\b(finish(?:ing)?|shoot(?:ing)?|shots?)\b", activity):
             return "the activities must actually practice finishing or shooting, not just passing"
         asks_for_cones = re.search(r"\b(cone|cones|markers?|training poles?)\b", activity)
-        asks_for_goal = re.search(r"\b(goal|net)\b", activity)
+        asks_for_goal = re.search(r"\b(goal\s*posts?|nets?|soccer goal|football goal|into the goal|in the goal|at the goal|toward the goal|towards the goal|between the posts|crossbar)\b", activity)
         asks_for_extra = re.search(r"\b(wall|partner|rebounder)\b", activity)
         if setup.equipment in {"football_only", "football_goal"} and asks_for_cones:
             return "the drills must not require cones or markers with this equipment choice"
