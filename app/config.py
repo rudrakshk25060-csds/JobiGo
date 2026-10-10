@@ -54,8 +54,6 @@ class Settings:
             raise ValueError("HF_MODEL must be exactly 'google/gemma-3-4b-it'.")
         if self.hf_timeout_seconds <= 0:
             raise ValueError("HF_TIMEOUT_SECONDS must be positive.")
-        if self.environment == "production" and not self.demo_access_token.strip():
-            raise ValueError("DEMO_ACCESS_TOKEN is required when APP_ENV=production.")
 
     @property
     def gemma_chat_url(self) -> str:

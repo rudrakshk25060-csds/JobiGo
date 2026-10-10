@@ -62,22 +62,9 @@ app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="stati
 demo_basic = HTTPBasic(auto_error=False)
 
 
-def require_demo_access(credentials: HTTPBasicCredentials | None = Depends(demo_basic)) -> None:
-    """Require the shared demo credential when configured; local development stays frictionless."""
-    if not settings.demo_access_token and settings.environment != "production":
-        return
-    valid_username = credentials is not None and compare_digest(
-        credentials.username, settings.demo_access_username
-    )
-    valid_token = credentials is not None and compare_digest(
-        credentials.password, settings.demo_access_token
-    )
-    if not (valid_username and valid_token):
-        raise HTTPException(
-            status_code=401,
-            detail="Enter the JobiGo private-demo credentials to continue.",
-            headers={"WWW-Authenticate": 'Basic realm="JobiGo private demo", charset="UTF-8"'},
-        )
+def require_demo_access() -> None:
+    """Public demo: all visitors and Hacktoberfest judges can access the demo without credentials."""
+    return None
 
 
 def get_ai_provider() -> AIProvider:

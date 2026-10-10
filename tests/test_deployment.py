@@ -81,13 +81,14 @@ class DeploymentPreparationTests(unittest.TestCase):
                 list(pool.map(lambda item: SessionStore(database).add_session(item), records))
             self.assertEqual(SessionStore(database).session_count(), 20)
 
-    def test_production_requires_shared_demo_token(self):
-        with self.assertRaisesRegex(ValueError, "DEMO_ACCESS_TOKEN"):
-            replace(settings, environment="production", demo_access_token="")
+    def test_production_allows_public_access_without_demo_token(self):
+        production = replace(settings, environment="production", demo_access_token="")
+        self.assertEqual(production.environment, "production")
+        self.assertEqual(production.demo_access_token, "")
         configured = replace(settings, environment="production", demo_access_token="long-demo-secret")
         self.assertEqual(configured.demo_access_token, "long-demo-secret")
 
-    def test_unauthorized_session_write_fails_authorized_write_works_and_count_stays_public(self):
+    def test_public_demo_allows_session_write_without_credentials_in_production(self):
         provider = MockAIProvider()
         with tempfile.TemporaryDirectory() as folder:
             store = SessionStore(Path(folder) / "sessions.sqlite3")
@@ -98,28 +99,23 @@ class DeploymentPreparationTests(unittest.TestCase):
             )
             mission = build_mission(setup)
             body = {
-                "mission_id": "private-session-123456",
+                "mission_id": "public-session-123456",
                 "mission": mission.model_dump(mode="json"),
                 "report": self.record().report.model_dump(mode="json"),
             }
-            production = replace(settings, environment="production", demo_access_token="demo-secret")
+            production = replace(settings, environment="production", demo_access_token="")
             try:
                 with patch.object(main, "settings", production), TestClient(main.app) as client:
-                    rejected = client.post("/api/sessions", json=body)
-                    self.assertEqual(rejected.status_code, 401)
-                    self.assertIn("WWW-Authenticate", rejected.headers)
-                    self.assertEqual(provider.review_calls, 0)
-                    self.assertEqual(client.get("/api/sessions").json(), {"session_count": 0})
-
-                    accepted = client.post("/api/sessions", json=body, auth=("jobigo", "demo-secret"))
-                    self.assertEqual(accepted.status_code, 200)
+                    response = client.post("/api/sessions", json=body)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertNotIn("WWW-Authenticate", response.headers)
                     self.assertEqual(client.get("/api/sessions").json(), {"session_count": 1})
                     self.assertNotIn("Weak foot felt harder", client.get("/api/sessions").text)
-                    self.assertNotIn("private-session-123456", client.get("/api/sessions").text)
+                    self.assertNotIn("public-session-123456", client.get("/api/sessions").text)
             finally:
                 main.app.dependency_overrides.clear()
 
-    def test_other_expensive_write_routes_are_also_protected(self):
+    def test_all_demo_routes_accessible_without_credentials_in_production(self):
         provider = MockAIProvider()
         with tempfile.TemporaryDirectory() as folder:
             main.app.dependency_overrides[get_store] = lambda: SessionStore(Path(folder) / "sessions.sqlite3")
@@ -131,12 +127,70 @@ class DeploymentPreparationTests(unittest.TestCase):
             mission = build_mission(setup)
             try:
                 with patch.object(main, "settings", production), TestClient(main.app) as client:
+                    # Landing page opens without credentials
+                    home_response = client.get("/")
+                    self.assertEqual(home_response.status_code, 200)
+                    self.assertNotIn("WWW-Authenticate", home_response.headers)
+
+                    # Static assets are accessible
+                    css_response = client.get("/static/style.css")
+                    self.assertEqual(css_response.status_code, 200)
+                    js_response = client.get("/static/app.js")
+                    self.assertEqual(js_response.status_code, 200)
+
+                    # Mission creation works without credentials (no 401 popup)
                     mission_response = client.post("/api/missions", json=setup.model_dump(mode="json"))
-                    self.assertEqual(mission_response.status_code, 401)
+                    self.assertEqual(mission_response.status_code, 200)
+                    self.assertNotIn("WWW-Authenticate", mission_response.headers)
+
+                    # Voice endpoint does not return 401 for absent credentials
                     voice_response = client.post("/api/missions/private-id-123456/voice", json={
                         "mission_id": "private-id-123456", "mission": mission.model_dump(mode="json")
                     })
-                    self.assertEqual(voice_response.status_code, 401)
+                    self.assertNotEqual(voice_response.status_code, 401)
+                    self.assertNotIn("WWW-Authenticate", voice_response.headers)
+            finally:
+                main.app.dependency_overrides.clear()
+
+    def test_validation_and_error_handling_work_without_authentication(self):
+        with tempfile.TemporaryDirectory() as folder:
+            main.app.dependency_overrides[get_store] = lambda: SessionStore(Path(folder) / "sessions.sqlite3")
+            production = replace(settings, environment="production", demo_access_token="")
+            try:
+                with patch.object(main, "settings", production), TestClient(main.app) as client:
+                    # Invalid mission input returns 422, not 401
+                    invalid_mission = client.post("/api/missions", json={"available_time": 10})
+                    self.assertEqual(invalid_mission.status_code, 422)
+                    self.assertNotIn("WWW-Authenticate", invalid_mission.headers)
+
+                    # Invalid session report returns 422, not 401
+                    invalid_session = client.post("/api/sessions", json={"mission_id": "short"})
+                    self.assertEqual(invalid_session.status_code, 422)
+                    self.assertNotIn("WWW-Authenticate", invalid_session.headers)
+            finally:
+                main.app.dependency_overrides.clear()
+
+    def test_secrets_are_not_exposed_in_public_endpoints_or_errors(self):
+        secret_token = "secret-token-xyz-123"
+        secret_openrouter = "sk-or-secret-key-456"
+        secret_hf = "hf_secret_token_789"
+        secret_eleven = "eleven_secret_key_abc"
+        configured = replace(
+            settings,
+            environment="production",
+            demo_access_token=secret_token,
+            openrouter_api_key=secret_openrouter,
+            hf_token=secret_hf,
+            elevenlabs_api_key=secret_eleven,
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            main.app.dependency_overrides[get_store] = lambda: SessionStore(Path(folder) / "sessions.sqlite3")
+            try:
+                with patch.object(main, "settings", configured), TestClient(main.app) as client:
+                    for endpoint in ["/health", "/ready", "/api/sessions"]:
+                        res = client.get(endpoint)
+                        for secret in [secret_token, secret_openrouter, secret_hf, secret_eleven]:
+                            self.assertNotIn(secret, res.text)
             finally:
                 main.app.dependency_overrides.clear()
 

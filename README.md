@@ -108,7 +108,7 @@ Settings can be customized via `.env`:
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
-| `APP_ENV` | `development` | `development` enables FastAPI docs; `production` requires `DEMO_ACCESS_TOKEN`. |
+| `APP_ENV` | `development` | `development` enables FastAPI docs; `production` disables docs for clean public deployment. |
 | `CORS_ALLOWED_ORIGINS` | empty | Comma-separated allowed browser origins (wildcards rejected). |
 | `DATA_FILE` | `./data/sessions.sqlite3` | SQLite database file path. |
 | `AI_PROVIDER` | `ollama` | Provider selection: `ollama`, `openrouter`, or `huggingface`. |
@@ -121,8 +121,8 @@ Settings can be customized via `.env`:
 | `HF_MODEL` | `google/gemma-3-4b-it` | Exact model ID for Hugging Face Router. |
 | `ELEVENLABS_API_KEY` | empty | Optional ElevenLabs API key for spoken briefings. |
 | `ELEVENLABS_VOICE_ID` | empty | Optional ElevenLabs voice identifier. |
-| `DEMO_ACCESS_USERNAME` | `jobigo` | HTTP Basic username for private demo access. |
-| `DEMO_ACCESS_TOKEN` | empty | HTTP Basic password/token for private demo access. |
+| `DEMO_ACCESS_USERNAME` | `jobigo` | Optional demo username. |
+| `DEMO_ACCESS_TOKEN` | empty | Optional demo token (public demo does not prompt for credentials). |
 
 ---
 
